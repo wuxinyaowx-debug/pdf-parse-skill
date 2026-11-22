@@ -305,10 +305,13 @@ def main():
         return 1
 
     # ---- fingerprint for phase-1 reuse (phase 2 must NOT re-parse) ----
+    # includes the PDF content hash so a swapped PDF of the same name/size
+    # can never hit a stale cache
     fp_current = {
         "case_id": case_id,
         "pdf": str(pdf.resolve()),
         "pdf_size": pdf.stat().st_size,
+        "pdf_md5": hashlib.md5(pdf.read_bytes()).hexdigest(),
         "case_md5": hashlib.md5(case_path.read_bytes()).hexdigest()
         if case_path.is_file() else None,
         "task_md5": hashlib.md5(task_path.read_bytes()).hexdigest()
@@ -319,6 +322,7 @@ def main():
 
     parsed = None
     task_items = None
+    phase1_ran = False
     if args.answers and fp_path.is_file() and final_path.is_file():
         try:
             fp_old = json.loads(fp_path.read_text(encoding="utf-8"))
@@ -331,10 +335,18 @@ def main():
                     changes.append("phase-1 result reused from work cache "
                                    "(PDF not re-parsed)")
                     print("phase1=reused case_id=%s" % case_id)
+                else:
+                    changes.append(
+                        "cache case_id %r != current %r; cache ignored"
+                        % (cached.get("case_id"), case_id))
+            else:
+                changes.append("fingerprint mismatch (case/task/PDF changed); "
+                               "cache ignored")
         except (json.JSONDecodeError, KeyError) as e:
             changes.append("phase-1 cache unreadable, re-running: %s" % e)
 
     if parsed is None:
+        phase1_ran = True
         # ---- phase 1: parse (stale-artifact protection) ----
         for stale in ("result.json", "fulltext.md"):
             (workdir / stale).unlink(missing_ok=True)
@@ -496,8 +508,8 @@ def main():
     final["output_contract_raw"] = contract
 
     # cache phase-1 output so a later --answers run can reuse it without
-    # re-parsing the PDF
-    if not args.answers:
+    # re-parsing the PDF; refresh the cache whenever phase 1 actually ran
+    if phase1_ran:
         fp_path.write_text(json.dumps(fp_current, ensure_ascii=False, indent=2),
                            encoding="utf-8")
         final_path.write_text(json.dumps(final, ensure_ascii=False),

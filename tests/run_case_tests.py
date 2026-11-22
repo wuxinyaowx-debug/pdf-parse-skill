@@ -144,6 +144,20 @@ def main():
         ok_statuses and res_a3["status"] == "success",
         "status=%s" % res_a3["status"])
 
+    # ---------- T6: swapped PDF must invalidate the cache ----------
+    # same case, same filename, but PDF content changed -> no reuse allowed
+    (in_a / "paper.pdf").write_bytes(twocol.read_bytes() + b"% post-hoc change\n")
+    out_a4 = WORK / "out_a4"
+    r5 = sh([str(RUN_CASE), "--input", str(in_a), "--output", str(out_a4),
+             "--work", str(work_s), "--answers", str(answers_ok)])
+    add("T6: changed PDF invalidates phase-1 cache (no reuse)",
+        "phase1=reused" not in r5.stdout
+        and any("fingerprint mismatch" in c for c in
+                read_json(out_a4 / "result.json")["changes"]),
+        r5.stdout.strip().splitlines()[:1])
+    # restore the original PDF for any later runs
+    shutil.copy(twocol, in_a / "paper.pdf")
+
     # ---------- T5: missing PDF ----------
     in_c, out_c, work_c = WORK / "in_c", WORK / "out_c", WORK / "work_c"
     make_case(in_c, "case-C", None)

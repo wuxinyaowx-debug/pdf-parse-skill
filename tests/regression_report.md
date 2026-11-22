@@ -4,7 +4,7 @@
 - total checks: 84, passed: 84, failed: 0
 - OCR end-to-end: NOT RUN (tesseract missing) — TSV coordinate conversion unit-checked instead
 
-## singlecol — 18/18 checks passed, 0.14s, status=success
+## singlecol — 18/18 checks passed, 0.13s, status=success
 - [PASS] text contains: deep parsing of single column articles
 - [PASS] text contains: alice example, bob sample
 - [PASS] text contains: keywords: layout; parsing; metadata
@@ -24,7 +24,7 @@
 - [PASS] metadata keywords
 - [PASS] bbox validity (11 boxes)
 
-## twocol — 21/21 checks passed, 0.20s, status=success
+## twocol — 21/21 checks passed, 0.21s, status=success
 - [PASS] text contains: a study of synthetic layout parsing
 - [PASS] text contains: jane doe, john smith
 - [PASS] text contains: department of testing, example university
@@ -47,7 +47,7 @@
 - [PASS] metadata authors
 - [PASS] bbox validity (25 boxes)
 
-## threecol — 7/7 checks passed, 0.14s, status=success
+## threecol — 7/7 checks passed, 0.12s, status=success
 - [PASS] reading order (6 anchors)
 - [PASS] section found: 1 Introduction
 - [PASS] section found: 2 Middle Column
@@ -78,7 +78,7 @@
 - [PASS] table cell present: f1
 - [PASS] bbox validity (7 boxes)
 
-## equations — 6/6 checks passed, 0.12s, status=success
+## equations — 6/6 checks passed, 0.13s, status=success
 - [PASS] reading order (3 anchors)
 - [PASS] equations count == 2
 - [PASS] equation number 1 found
@@ -86,17 +86,17 @@
 - [PASS] prose not misread as equation: see also the earlier review
 - [PASS] bbox validity (9 boxes)
 
-## scanned — 2/2 checks passed, 0.14s, status=unreadable
+## scanned — 2/2 checks passed, 0.18s, status=unreadable
 - [PASS] status in ['unreadable', 'partial']
 - [PASS] bbox validity (0 boxes)
 
-## mixedlayer — 4/4 checks passed, 0.22s, status=partial
+## mixedlayer — 4/4 checks passed, 0.23s, status=partial
 - [PASS] text contains: this page has a normal text layer
 - [PASS] status in ['partial', 'success']
 - [PASS] image page 2 flagged
 - [PASS] bbox validity (4 boxes)
 
-## crosspage_table — 6/6 checks passed, 0.16s, status=success
+## crosspage_table — 6/6 checks passed, 0.19s, status=success
 - [PASS] reading order (4 anchors)
 - [PASS] tables count == 2
 - [PASS] page-1 grid has no page-2 rows
