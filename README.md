@@ -1,60 +1,79 @@
-# scientific-pdf-parser — 使用与方法说明
+# scientific-pdf-parser v2 — 使用与方法说明
 
-将科研文献 PDF 解析为**可核验**的结构化结果：章节层级、段落、表题、图题、编号公式、
-参考文献，每一项都带页码与版面区块（bbox）定位；双栏/多栏按原版式阅读顺序输出；
-页眉页脚自动剔除并留痕；扫描件如实标注，不编造文字。
+将科研文献 PDF 解析为**可核验**的结构化结果，并支撑按 task.md 的科研阅读任务
+（问答/翻译/提取/核验）。所有结论可回指原文页码与版面区块；读不出的部分如实标注，
+不编造文字、不虚构坐标、不用 null 填充冒充完成。
+
+## v2 相对 v1 的主要变化
+
+- 两阶段任务流程：脚本做确定性解析与证据检索，Agent 做语义作答并回写合并（`--answers`）。
+- OCR 改用 Tesseract TSV 真实坐标（300dpi 像素 → PDF pt），禁止估算坐标。
+- 表格：题注 → 区域捕获 → 视觉行合并 → 单元格切分 → 列对齐 → 多行表头、合并单元格、
+  跨页续表标记 → Markdown + JSON 网格。
+- 段落 bbox 由段落自身文本行计算，支持跨页段落（分页 bbox）。
+- 元数据：标题/作者/单位/摘要/关键词/DOI/期刊年份，附页码、bbox、置信度，缺失为 null。
+- 分栏泛化为 1~4 栏左边缘聚类，修复居中块误入栏、单块假栏、数字行误判标题等问题。
+- 8 类合成夹具回归测试（77 项实测检查）。
 
 ## 安装与依赖
 
 | 依赖 | 版本 | 用途 | 安装 |
 |-|-|-|-|
 | Python | ≥ 3.9（仅标准库） | 运行脚本 | 任意发行版 |
-| Poppler | ≥ 0.86（`pdftotext`、`pdfinfo`） | 文本层与版面提取 | Debian/Ubuntu: `apt install poppler-utils`；macOS: `brew install poppler`；Windows: 使用 Poppler for Windows 发行包并加入 PATH |
-| Poppler `pdftoppm` + Tesseract | 任意近期版本 | （可选）扫描件 OCR | `apt install poppler-utils tesseract-ocr` |
+| Poppler | ≥ 0.86（`pdftotext`；`pdfinfo`、`pdftoppm` 可选） | 文本层与版面提取、OCR 渲染 | Debian/Ubuntu: `apt install poppler-utils`；macOS: `brew install poppler`；Windows: Poppler for Windows 加入 PATH |
+| Tesseract | 任意近期版本 | （可选）扫描页 OCR | `apt install tesseract-ocr` |
+| matplotlib | ≥ 3.5 | （仅开发）生成回归夹具 | `pip install matplotlib` |
 
-无网络、无第三方 Python 包依赖；不依赖任何个人文件或手工中间步骤。
+无网络、无第三方 Python 运行时依赖。
 
 ## 快速开始
 
-评测/案例模式（与平台约定一致）：
+评测/案例两阶段模式（与平台约定一致）：
 
 ```bash
+# 阶段 1：解析 + 任务分析 + 证据检索
 python scripts/run_case.py --input /input --output /app/output --work /app/work
+# 阶段 2：Agent 作答后合并
+python scripts/run_case.py --input /input --output /app/output --work /app/work --answers answers.json
 ```
 
 单文件模式：
 
 ```bash
 python scripts/parse_pdf.py paper.pdf --out out/
-# 产出 out/result.json 与 out/fulltext.md
+```
+
+回归测试：
+
+```bash
+python tests/run_regression.py    # 生成夹具、实测、写 regression_report.md
 ```
 
 ## 输入与输出
 
-- 输入：科研文献 PDF（文本型、扫描型或混合；单栏/双栏/多栏；中英文）。
-- 输出字段、状态语义、证据定位方式见 `references/output-contract.md`。
-- 方法与阈值见 `references/method.md`。
+- 输入：科研文献 PDF（单/双/三栏、中英文、文本型/扫描/混合）。
+- 输出字段、状态语义、answers.json 格式见 `references/output-contract.md`。
+- 方法、阈值与失败模式见 `references/method.md`。
 
-## 适用场景
+## 限制（如实声明）
 
-- 文献解析、阅读问答、参数/结果抽取等需要**回指原文页码与区块**的任务。
-- 双栏论文阅读顺序修复、图表题注定位、编号公式与参考文献条目提取。
-
-## 限制
-
-- 表格当前可靠定位题注与区块，单元格级网格还原需结合 `pdftotext -layout` 或人工核对。
-- 公式保留原文符号串，不转 LaTeX；上下标失真时以 bbox 回查原文为准。
-- 三栏且栏宽不均的版面可能出现栏间交错（栏内顺序仍正确）。
-- 无文本层且环境无 OCR 工具时，对应页面标记 `unreadable`，不输出猜测内容。
+- 关键词证据检索不跨语言：中文问题配英文论文时命中数可能为 0，此时给出标注过的
+  类型兜底证据，最终作答依赖 Agent 阶段 2 的语义阅读。
+- 表格网格基于水平间隙切分：无线表列距过近、单元格内换行复杂时会标 `uncertain`
+  并保留原始行，不猜测单元格归属。
+- 公式保留提取符号串，上下标版面不还原，需以 bbox 回查原文。
+- 元数据中作者/单位为低置信度启发式，期刊/年份取自页眉页脚时为低置信度。
+- OCR 端到端在无 tesseract 的环境中不可运行；坐标换算逻辑有独立单元检查。
 
 ## 自查方法
 
-1. 检查 `result.json` 的 `status` 与 `uncertainties`，确认受限范围。
-2. 抽 3 处结论，按 `page` + `bbox` 回原文核对文字是否逐字一致。
-3. 对照 `stats`（段落/章节/文献条数）与原刊目录页，确认无漏段漏条。
-4. 查看 `removed_running_matter`，确认被剔除的确是页眉页脚而非正文。
+1. 看 `status` 与 `uncertainties` 确认受限范围。
+2. 抽查 3 处结论按 `page`+`bbox` 回原文逐字核对。
+3. 对照 `stats` 与原刊目录确认无漏段漏条。
+4. 查 `removed_running_matter` 确认剔除的是页眉页脚。
+5. 运行 `tests/run_regression.py` 复核解析质量基线。
 
 ## 维护
 
-- 阈值（词数、栏宽比、页眉页脚比例）集中在 `scripts/parse_pdf.py` 顶部常量，调整需回归测试。
-- 变更记录写入每次运行 `result.json` 的 `changes` 字段。
+- 阈值集中在 `scripts/parse_pdf.py` 顶部常量；调整须重跑回归测试。
+- 每次运行的变更写入 `result.json` 的 `changes`。
