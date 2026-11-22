@@ -1,4 +1,4 @@
-"""run_case_tests.py — Harness-level tests for run_case.py (v3).
+"""run_case_tests.py — Harness-level tests for run_case.py.
 
 Covers the failure modes that matter for evaluation integrity:
   T1 stale result protection: a corrupt PDF in a work dir that still holds a

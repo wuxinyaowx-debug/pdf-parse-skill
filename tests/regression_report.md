@@ -4,7 +4,7 @@
 - total checks: 84, passed: 84, failed: 0
 - OCR end-to-end: NOT RUN (tesseract missing) — TSV coordinate conversion unit-checked instead
 
-## singlecol — 18/18 checks passed, 0.13s, status=success
+## singlecol — 18/18 checks passed, 0.16s, status=success
 - [PASS] text contains: deep parsing of single column articles
 - [PASS] text contains: alice example, bob sample
 - [PASS] text contains: keywords: layout; parsing; metadata
@@ -86,17 +86,17 @@
 - [PASS] prose not misread as equation: see also the earlier review
 - [PASS] bbox validity (9 boxes)
 
-## scanned — 2/2 checks passed, 0.18s, status=unreadable
+## scanned — 2/2 checks passed, 0.16s, status=unreadable
 - [PASS] status in ['unreadable', 'partial']
 - [PASS] bbox validity (0 boxes)
 
-## mixedlayer — 4/4 checks passed, 0.23s, status=partial
+## mixedlayer — 4/4 checks passed, 0.21s, status=partial
 - [PASS] text contains: this page has a normal text layer
 - [PASS] status in ['partial', 'success']
 - [PASS] image page 2 flagged
 - [PASS] bbox validity (4 boxes)
 
-## crosspage_table — 6/6 checks passed, 0.19s, status=success
+## crosspage_table — 6/6 checks passed, 0.18s, status=success
 - [PASS] reading order (4 anchors)
 - [PASS] tables count == 2
 - [PASS] page-1 grid has no page-2 rows

@@ -1,8 +1,8 @@
-# 输出约定（v3）
+# 输出约定
 
 每次运行产出 `result.json`（评测模式在 `<output>/result.json`）与 `fulltext.md`。
 
-## 运行可靠性（v3）
+## 运行可靠性
 
 - 阶段 1 运行前删除工作目录中残留的 `result.json`/`fulltext.md`；解析器返回码非零、
   超时（600 s）、产物缺失或 JSON 损坏均判 `failed` 并附 stderr 尾部。

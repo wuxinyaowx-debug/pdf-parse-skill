@@ -3,7 +3,7 @@ name: scientific-pdf-parser
 description: 将科研文献 PDF 解析为可核验的结构化结果（章节层级、段落、表格网格、图题、编号公式、参考文献、论文元数据，逐项附页码与版面区块定位），支持单/双/三栏阅读顺序还原、页眉页脚剔除、扫描件 OCR（Tesseract TSV 真实坐标），并按 task.md 完成科研问答/翻译/提取/核验的两阶段任务流程。Use when a task requires parsing a scientific paper PDF, extracting text/tables/equations/references with page-level evidence, fixing multi-column reading order, or answering literature-reading questions with verifiable citations. 当任务要求解析科研文献 PDF、还原多栏阅读顺序、提取表格公式参考文献并给出页码证据、或依据原文回答科研问题时使用。
 ---
 
-# Scientific PDF Parser（科研文献 PDF 解析 v2）
+# Scientific PDF Parser（科研文献 PDF 解析）
 
 将科研文献 PDF 解析为结构化、可回查原文证据的结果，并在此基础上完成 task.md 指定的科研阅读任务。核心原则：**逐字提取、顺序正确、结构可拆、结论可核、答不出就明说**。
 
@@ -23,6 +23,9 @@ description: 将科研文献 PDF 解析为可核验的结构化结果（章节�
 ## 两阶段任务流程（重要）
 
 本 Skill 明确区分**确定性解析**与**语义任务执行**。Python 脚本不做模型推理。
+在评测环境（DeepSeek Harness，单案例单次执行）中，Agent 应按 ①阶段 1 →
+②语义作答 → ③阶段 2 合并 的顺序在一次执行内完成一个案例，并确认
+`/app/output/result.json` 已写出。
 
 ### 阶段 1：解析与证据索引（脚本完成）
 
@@ -73,7 +76,18 @@ python <skill_dir>/scripts/parse_pdf.py <paper.pdf> --out <output_dir>
 
 - `status` ∈ `success` / `partial` / `failed` / `unreadable`；部分完成必须说明受限范围。
 - 字段详见 `references/output-contract.md`；方法阈值与已知失败模式见 `references/method.md`。
-- 回归测试：`python <skill_dir>/tests/run_regression.py`（8 类合成夹具，实测指标，说明见 `tests/README.md`）。
+- 回归测试：`python <skill_dir>/tests/run_regression.py`（9 类合成夹具，实测指标，说明见 `tests/README.md`）。
+
+## 交付物清单
+
+| 路径 | 作用 | 使用条件 |
+|-|-|-|
+| `scripts/run_case.py` | 评测入口（两阶段、缓存复用、证据校验） | Python ≥ 3.9 + pdftotext |
+| `scripts/parse_pdf.py` | 解析器本体（可独立调用） | 同上；OCR 需 pdftoppm + tesseract |
+| `references/method.md` | 方法、阈值与失败模式 | 文档 |
+| `references/output-contract.md` | result.json 与 answers.json 字段约定 | 文档 |
+| `examples/minimal-example.md` | 最小调用示例（输出为示意） | 文档 |
+| `tests/` | 开发用回归测试与实测报告（非正式案例、非预制答案） | 运行需 matplotlib |
 
 ## 异常处理
 
