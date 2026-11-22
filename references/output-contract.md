@@ -1,6 +1,15 @@
-# 输出约定（v2）
+# 输出约定（v3）
 
 每次运行产出 `result.json`（评测模式在 `<output>/result.json`）与 `fulltext.md`。
+
+## 运行可靠性（v3）
+
+- 阶段 1 运行前删除工作目录中残留的 `result.json`/`fulltext.md`；解析器返回码非零、
+  超时（600 s）、产物缺失或 JSON 损坏均判 `failed` 并附 stderr 尾部。
+- 解析结果 `case_id` 与当前案例不一致时拒绝采用（防止跨案例串用）。
+- 阶段 1 产物缓存于 `<work>/phase1_final.json` + `phase1_fingerprint.json`
+  （case/task/PDF 摘要）；`--answers` 运行时指纹一致则**直接复用，不重解析 PDF**，
+  并在 `changes` 中记录复用。
 
 ## run_case.py 顶层字段
 
@@ -28,8 +37,9 @@
 | `id` / `text` / `type` | 条目编号 / 原文 / 分类（qa、translate、extract、verify） |
 | `candidate_evidence` | 阶段 1 检索到的证据：`kind`（paragraph/table/figure）、索引、`page`、`bbox`、`keyword_hits`、`snippet`；`keyword_hits=0` 且带 `fallback` 字段者为类型兜底证据（如中文问题提到"表"），不是关键词命中 |
 | `answer` | 阶段 2 前为 `null`；Agent 作答并 `--answers` 合并后为答案文本 |
-| `answer_status` | `pending_agent_phase2` / `answered_by_agent` |
+| `answer_status` | `pending_agent_phase2` / `answered_verified` / `answered_evidence_suspect` / `answered_no_evidence` |
 | `evidence` | Agent 绑定的证据（合并后） |
+| `evidence_validation` | 合并时的逐条校验结果：`checked` 数量与 `invalid` 明细（索引越界、页码不符、bbox 不符）；无证据或证据无效的答案在 `uncertainties` 中登记 |
 
 ### answers.json 格式（阶段 2 输入）
 
@@ -46,13 +56,13 @@
 | `metadata` | `title`/`authors`/`affiliations`/`abstract`/`keywords`/`doi`/`journal`/`year`；每项 `{value, page, bbox, confidence}` 或 `null` |
 | `sections` | `title`、`level`、`page`、`bbox`（标题行自身）、`path` |
 | `paragraphs` | `text`（去连字符）、`page`、`pages`、`bbox`（段落自身文本行并集）、`page_bboxes`（跨页时分页 bbox）、`n_lines`、`cross_page`、`section` |
-| `tables` | `label`、`caption`、`page`、`bbox`（题注+表格体并集）、`continued`、`grid`（`n_columns`、`n_header_rows`、`headers`、`rows`、`merged_cells`、`uncertain`）、`markdown`；无法成格时保留 `raw_lines` 且 `uncertain: true` |
+| `tables` | `label`、`caption`、`page`、`bbox`（题注+表格体并集）、`continued`、`continuation_of`（续表指向前表 label）、`note_page_break`（页边界截断说明）、`grid`（`n_columns`、`n_header_rows`、`headers`、`rows`、`merged_cells`、`uncertain`）、`markdown`；**跨页表格按页分别成格，行不跨页合并**，靠 `continuation_of` 关联；无法成格时保留 `raw_lines` 且 `uncertain: true` |
 | `figures` | `label`、`caption`、`page`、`bbox` |
 | `equations` | `text`、`number`、`page`、`bbox`、`multiline`、`uncertain`、`note`（上下标不还原提示） |
 | `references` | `index`、`text`、`page`、`bbox` |
 | `removed_running_matter` | 被剔除页眉页脚文本与页码 |
 | `uncertainties` | 页面级/文档级不确定项 |
-| `stats` | 计数 + `page_classes`（text/sparse/empty）+ `ocr_pages`/`sparse_pages`/`empty_pages` |
+| `stats` | 计数 + `page_classes`（text/sparse/empty）+ `ocr_pages`/`sparse_pages`/`empty_pages` + `ocr_detail`（每页 `source`、`words`、`mean_conf`、`verified: false`） |
 
 ## 证据定位
 

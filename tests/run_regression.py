@@ -109,6 +109,12 @@ GT = {
         "must_contain": ["this page has a normal text layer"],
         "expect_flagged_page": 2,
     },
+    "crosspage_table": {
+        "tables": 2,
+        "order": ["the table begins on this page",
+                  "table 1: rows split across two pages",
+                  "table 1 (continued)", "closing prose after the continued table"],
+    },
 }
 
 
@@ -179,6 +185,21 @@ def check_result(name, pdf_path, pp, tmp_out):
         for cell in gt["table_cells"]:
             add("table cell present: %s" % cell, norm(cell) in grid_md)
 
+    # --- cross-page table: per-page grids + explicit continuation link
+    if name == "crosspage_table" and len(result["tables"]) >= 2:
+        t1, t2 = result["tables"][0], result["tables"][1]
+        md1 = norm(t1.get("markdown", ""))
+        md2 = norm(t2.get("markdown", ""))
+        add("page-1 grid has no page-2 rows", "b1" not in md1 and "30" not in md1,
+            md1[:80])
+        add("page-2 grid has no page-1 rows", "a1" not in md2 and "10" not in md2,
+            md2[:80])
+        add("continuation link recorded",
+            t2.get("continued") is True
+            and "continuation_of" in t2,
+            "t2.continued=%r continuation_of=%r" % (t2.get("continued"),
+                                                    t2.get("continuation_of")))
+
     # --- running matter
     for rm in gt.get("running_removed", []):
         add("running matter removed: %s" % rm[:40],
@@ -243,21 +264,34 @@ def check_result(name, pdf_path, pp, tmp_out):
 
 
 def check_ocr_tsv_math(pp):
-    """Unit check of the Tesseract-TSV -> PDF-point conversion (no tesseract
-    needed): a word at pixel (300, 600) @300dpi must land at (72, 144) pt."""
+    """Unit checks of Tesseract-TSV parsing (no tesseract needed)."""
+    out = []
     tsv = ("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\t"
            "width\theight\tconf\ttext\n"
            "5\t1\t1\t1\t1\t1\t300\t600\t150\t60\t96.0\tHello\n")
     blocks = pp.parse_tesseract_tsv(tsv, 595.0, 842.0, dpi=300)
     if not blocks:
-        return {"check": "ocr tsv conversion", "pass": False, "detail": "no blocks"}
-    w = blocks[0].lines[0].words[0]
-    ok = (abs(w.x0 - 72.0) < 0.01 and abs(w.y0 - 144.0) < 0.01
-          and abs(w.x1 - 108.0) < 0.01 and abs(w.y1 - 158.4) < 0.01)
-    return {"check": "ocr tsv conversion (300dpi px -> pt)",
-            "pass": ok,
-            "detail": "got (%.1f, %.1f, %.1f, %.1f), want (72, 144, 108, 158.4)"
-                      % (w.x0, w.y0, w.x1, w.y1)}
+        out.append({"check": "ocr tsv conversion", "pass": False,
+                    "detail": "no blocks"})
+    else:
+        w = blocks[0].lines[0].words[0]
+        ok = (abs(w.x0 - 72.0) < 0.01 and abs(w.y0 - 144.0) < 0.01
+              and abs(w.x1 - 108.0) < 0.01 and abs(w.y1 - 158.4) < 0.01)
+        out.append({"check": "ocr tsv conversion (300dpi px -> pt)",
+                    "pass": ok,
+                    "detail": "got (%.1f, %.1f, %.1f, %.1f), want (72, 144, 108, 158.4)"
+                              % (w.x0, w.y0, w.x1, w.y1)})
+    # confidence aggregation
+    tsv2 = ("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\t"
+            "width\theight\tconf\ttext\n"
+            "5\t1\t1\t1\t1\t1\t0\t0\t100\t24\t80.0\tFoo\n"
+            "5\t1\t1\t1\t1\t2\t120\t0\t100\t24\t60.0\tBar\n")
+    blocks2, stats = pp.parse_tesseract_tsv(tsv2, 595.0, 842.0, dpi=300,
+                                            with_conf=True)
+    ok2 = (stats["words"] == 2 and abs(stats["mean_conf"] - 70.0) < 0.01)
+    out.append({"check": "ocr tsv confidence aggregation",
+                "pass": ok2, "detail": "got %s" % stats})
+    return out
 
 
 def main():
@@ -286,10 +320,10 @@ def main():
         pdf = work / ("%s.pdf" % name)
         reports.append(check_result(name, pdf, pp, work))
 
-    ocr_check = check_ocr_tsv_math(pp)
+    ocr_checks = check_ocr_tsv_math(pp)
 
     # ---- aggregate measured metrics
-    all_checks = [c for r in reports for c in r["checks"]] + [ocr_check]
+    all_checks = [c for r in reports for c in r["checks"]] + ocr_checks
     n_pass = sum(1 for c in all_checks if c["pass"])
 
     lines = ["# Regression report (measured, not estimated)",
@@ -315,13 +349,15 @@ def main():
             lines.append("- [%s] %s%s" % (mark, c["check"],
                                           (" — " + c["detail"]) if c["detail"] and not c["pass"] else ""))
         lines.append("")
-    mark = "PASS" if ocr_check["pass"] else "FAIL"
+    mark_all = {True: "PASS", False: "FAIL"}
     lines.append("## unit checks")
-    lines.append("- [%s] %s — %s" % (mark, ocr_check["check"], ocr_check["detail"]))
+    for c in ocr_checks:
+        lines.append("- [%s] %s — %s" % (mark_all[c["pass"]], c["check"],
+                                           c["detail"]))
 
     (work / "regression_report.md").write_text("\n".join(lines), encoding="utf-8")
     (work / "regression_results.json").write_text(json.dumps(
-        {"env": env, "reports": reports, "ocr_unit_check": ocr_check,
+        {"env": env, "reports": reports, "ocr_unit_checks": ocr_checks,
          "summary": {"checks": len(all_checks), "passed": n_pass}},
         ensure_ascii=False, indent=2), encoding="utf-8")
     print("checks: %d passed / %d total -> %s" % (n_pass, len(all_checks),

@@ -47,7 +47,10 @@ Agent 阅读 `<output>/result.json` 与 `<output>/fulltext.md`，对每个 `task
 python <skill_dir>/scripts/run_case.py --input /input --output /app/output --work /app/work --answers <answers.json>
 ```
 
-合并后 `answer_status=answered_by_agent`，全部条目有答案时 `status` 由解析状态决定（不再因待答而 partial）。
+- 合并运行**不重新解析 PDF**：指纹（case/task/PDF）一致时直接复用 `<work>/phase1_final.json`。
+- 合并时逐条**校验证据**：索引越界、页码与对象实际页不符、bbox 与实际偏差 > 1.5pt 均判无效；
+  `answer_status` 据此为 `answered_verified` / `answered_evidence_suspect` / `answered_no_evidence`，
+  无效与无证据答案登记入 `uncertainties`。全部条目有答案后 `status` 由解析状态决定。
 
 ### 单文件解析模式（无任务时）
 

@@ -58,7 +58,9 @@ FIG_CAP_RE = re.compile(
     r"^\s*((?:figure|fig\.?)\s*[0-9IVX]+\s*[:.：]|图\s*[0-9IVX]+)",
     re.IGNORECASE)
 TAB_CAP_RE = re.compile(
-    r"^\s*((?:table|tab\.?)\s*[0-9IVX]+\s*[:.：]|表\s*[0-9IVX]+)",
+    r"^\s*((?:table|tab\.?)\s*[0-9IVX]+\s*[:.：]"
+    r"|(?:table|tab\.?)\s*[0-9IVX]+\s*\((?:continued|续)\)"
+    r"|表\s*[0-9IVX]+)",
     re.IGNORECASE)
 TAB_CONT_RE = re.compile(r"continued|续表|（续）|\(续\)", re.IGNORECASE)
 EQN_NUM_RE = re.compile(r"[（(]\s*(\d+(?:\.\d+)?)\s*[)）]\s*$")
@@ -73,6 +75,7 @@ AFFIL_HINT_RE = re.compile(
     r"大学|学院|研究所|研究院|实验室|中心|医院|公司", re.IGNORECASE)
 SENT_END = tuple(".!?。！？：:")
 NUM_TOKEN_RE = re.compile(r"^[+-]?[\d.,%]+$")
+CJK_RE = re.compile(r"[一-鿿]")
 
 
 @dataclass
@@ -260,11 +263,13 @@ def classify_page(nwords):
 
 # --------------------------------------------------------------------- OCR
 
-def parse_tesseract_tsv(tsv_text, pw, ph, dpi=OCR_DPI):
+def parse_tesseract_tsv(tsv_text, pw, ph, dpi=OCR_DPI, with_conf=False):
     """Convert Tesseract TSV (pixel coords at *dpi*) into Blocks with real
-    PDF-point coordinates. Pure function — unit-testable without tesseract."""
+    PDF-point coordinates. Pure function — unit-testable without tesseract.
+    With with_conf=True returns (blocks, {"words": n, "mean_conf": c})."""
     scale = 72.0 / dpi
     groups = {}  # (block, par) -> {(line): [Word]}
+    confs = []
     for row in tsv_text.splitlines()[1:]:
         cols = row.split("\t")
         if len(cols) < 12:
@@ -276,11 +281,14 @@ def parse_tesseract_tsv(tsv_text, pw, ph, dpi=OCR_DPI):
         try:
             left, top = float(cols[6]), float(cols[7])
             width, height = float(cols[8]), float(cols[9])
+            conf = float(cols[10])
         except ValueError:
             continue
         w = Word(text=text, x0=left * scale, y0=top * scale,
                  x1=(left + width) * scale, y1=(top + height) * scale)
         groups.setdefault((bnum, pnum), {}).setdefault(lnum, []).append(w)
+        if conf >= 0:
+            confs.append(conf)
     blocks = []
     for key in sorted(groups, key=lambda k: (int(k[0]), int(k[1]))):
         blk = Block(source="ocr")
@@ -289,12 +297,17 @@ def parse_tesseract_tsv(tsv_text, pw, ph, dpi=OCR_DPI):
             blk.lines.append(Line(words=words))
         if blk.lines:
             blocks.append(blk)
+    if with_conf:
+        stats = {"words": sum(len(ln.words) for b in blocks for ln in b.lines),
+                 "mean_conf": round(sum(confs) / len(confs), 1) if confs else None}
+        return blocks, stats
     return blocks
 
 
 def ocr_page(pdf, page_no, pw, ph):
     """OCR one scanned page: pdftoppm render + tesseract TSV with real
-    coordinates converted to PDF points. Returns ([Block], error)."""
+    coordinates converted to PDF points.
+    Returns ([Block], error, stats) — stats has words/mean_conf or None."""
     tmpdir = Path(tempfile.mkdtemp(prefix="ocr_", dir=ascii_safe_tmpdir()))
     try:
         imgbase = tmpdir / "page"
@@ -303,15 +316,15 @@ def ocr_page(pdf, page_no, pw, ph):
                                str(pdf), str(imgbase)])
         img = Path(str(imgbase) + ".png")
         if not ok or not img.is_file():
-            return None, "pdftoppm failed: %s" % err.strip()
+            return None, "pdftoppm failed: %s" % err.strip(), None
         ok, out, err = run_tool(["tesseract", str(img), "stdout",
                                  "--psm", "3", "tsv"])
         if not ok:
-            return None, "tesseract failed: %s" % err.strip()
-        blocks = parse_tesseract_tsv(out, pw, ph)
+            return None, "tesseract failed: %s" % err.strip(), None
+        blocks, stats = parse_tesseract_tsv(out, pw, ph, with_conf=True)
         if not blocks:
-            return None, "tesseract produced no words"
-        return blocks, None
+            return None, "tesseract produced no words", None
+        return blocks, None, stats
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -468,19 +481,29 @@ def dehyphenate(texts):
     return out.strip()
 
 
+def heading_word_ok(w):
+    """Heading words contain letters (Latin/CJK) but no digits. 'LSTM-based'
+    passes; 'a2', '+1.0' do not."""
+    return bool(re.search(r"[A-Za-z一-鿿]", w)) and not re.search(r"\d", w)
+
+
 def heading_level(t):
     """Return heading level (1-based) or None. Guards against numbered
-    sentences ('3 results show ...') and numeric table cells ('91.2 +1.0')."""
+    sentences ('3 results show ...') and numeric table cells ('91.2 +1.0',
+    '10 A a2')."""
     m = SEC_NUM_RE.match(t)
     if m:
         rest = m.group(2)
-        if len(rest.split()) > 10 or t.rstrip().endswith(SENT_END):
+        words = rest.split()
+        if len(words) > 10 or t.rstrip().endswith(SENT_END):
             return None
         c0 = rest[0]
         if not c0.isalpha():
             return None  # numeric/sign-led rest => data cell, not a heading
         if c0.islower():
             return None  # numbered sentence, not a heading
+        if not all(heading_word_ok(w) for w in words):
+            return None  # digit-bearing word => table data, not a heading
         return m.group(1).count(".") + 1
     if SEC_NAME_RE.match(t):
         return 1
@@ -778,14 +801,20 @@ def _parse_document_staged(pdf, uncertainties):
         page_widths.append(pw)
 
     # OCR for no-text-layer pages only (sparse pages are usually figure pages)
+    ocr_detail = []
     if empty_pages:
         if shutil.which("pdftoppm") and shutil.which("tesseract"):
             for p in list(empty_pages):
-                blocks, oerr = ocr_page(pdf, p, page_widths[p - 1], page_heights[p - 1])
+                blocks, oerr, ostats = ocr_page(pdf, p, page_widths[p - 1],
+                                                page_heights[p - 1])
                 if blocks:
                     pages_blocks[p - 1] = blocks
                     empty_pages.remove(p)
                     ocr_pages.append(p)
+                    ocr_detail.append({"page": p, "source": "tesseract TSV",
+                                       "words": ostats["words"] if ostats else None,
+                                       "mean_conf": ostats["mean_conf"] if ostats else None,
+                                       "verified": False})
                 else:
                     uncertainties.append({"page": p, "issue": "OCR failed",
                                           "detail": oerr or ""})
@@ -793,7 +822,8 @@ def _parse_document_staged(pdf, uncertainties):
                 uncertainties.append({
                     "issue": "pages recovered by OCR (300dpi + tesseract TSV, "
                              "real coordinates); text NOT human-verified",
-                    "pages": ocr_pages, "ocr": True})
+                    "pages": ocr_pages, "ocr": True,
+                    "detail": ocr_detail})
         else:
             uncertainties.append({
                 "issue": "no text layer and no OCR tools (pdftoppm/tesseract missing)",
@@ -827,6 +857,7 @@ def _parse_document_staged(pdf, uncertainties):
     last_page = [0]
     pending = []          # list of (page, Line) forming the current paragraph
     capture = None        # active table entry being filled
+    pending_cont = None   # table closed at a page boundary, awaiting continuation
 
     def emit_page_anchor(p):
         if p != last_page[0]:
@@ -871,6 +902,7 @@ def _parse_document_staged(pdf, uncertainties):
         nonlocal capture
         if capture is None:
             return
+        capture.pop("_last_page", None)
         if capture["line_objs"]:
             grid, md_tbl, unc = build_grid(capture.pop("line_objs"))
             capture["grid"] = grid
@@ -889,6 +921,15 @@ def _parse_document_staged(pdf, uncertainties):
         lines = blk.lines
         if not lines:
             continue
+
+        # page boundary during table capture: close the grid at the page end
+        # (rows are never merged across pages) and arm continuation detection
+        if capture is not None and page != capture.get("_last_page", page):
+            closed_entry = capture
+            close_table(page)
+            closed_entry["note_page_break"] = (
+                "capture stopped at page boundary; rows not merged across pages")
+            pending_cont = closed_entry
 
         # ---------------- references section: split per line
         if in_refs:
@@ -918,14 +959,57 @@ def _parse_document_staged(pdf, uncertainties):
             i += 1
             if not t:
                 continue
-            # heading number split onto its own line ("2.1" / "Layout extraction")
-            if re.fullmatch(r"\d+(?:\.\d+)*\.?", t) and i < len(lines) \
-                    and lines[i].text.strip():
-                t = "%s %s" % (t, lines[i].text.strip())
+            # heading number split onto its own line ("2.1" / "Layout extraction").
+            # Merge only when the next line is on the SAME visual row (real split
+            # headings) — a number and the next line at a different y belong to
+            # different table rows and must never merge into a fake heading.
+            nxt_txt = lines[i].text.strip() if i < len(lines) else ""
+            same_row = False
+            if nxt_txt:
+                yc1 = (ln.bbox[1] + ln.bbox[3]) / 2.0
+                nb = lines[i].bbox
+                yc2 = (nb[1] + nb[3]) / 2.0
+                same_row = abs(yc1 - yc2) < 0.5 * max(ln.bbox[3] - ln.bbox[1], 1.0)
+            if re.fullmatch(r"\d+(?:\.\d+)*\.?", t) and nxt_txt and same_row \
+                    and (nxt_txt[0].isupper() or CJK_RE.match(nxt_txt)) \
+                    and all(heading_word_ok(w) for w in nxt_txt.split()):
+                t = "%s %s" % (t, nxt_txt)
                 merged_box = union_bbox([ln.bbox, lines[i].bbox])
                 i += 1
             else:
                 merged_box = ln.bbox
+
+            # ---------------- table continuation after a page break
+            if pending_cont is not None and capture is None:
+                tm_c = TAB_CAP_RE.match(t)
+                if tm_c and TAB_CONT_RE.search(t):
+                    flush_pending()
+                    emit_page_anchor(page)
+                    capture = {"label": tm_c.group(1), "caption": t, "page": page,
+                               "bbox": bbox_dict(merged_box), "continued": True,
+                               "continuation_of": pending_cont["label"],
+                               "note": "explicit continuation caption; grid kept "
+                                       "separate per page",
+                               "line_objs": [], "_last_page": page}
+                    pending_cont = None
+                    md_parts.append("**%s**\n" % t)
+                    continue
+                if not heading_level(t) and not FIG_CAP_RE.match(t) \
+                        and not is_prose_line(t):
+                    flush_pending()
+                    capture = {"label": pending_cont["label"] + " (cont.)",
+                               "caption": pending_cont["caption"],
+                               "page": page, "bbox": bbox_dict(merged_box),
+                               "continued": True,
+                               "continuation_of": pending_cont["label"],
+                               "uncertain": True,
+                               "note": "no repeated caption; continuation inferred "
+                                       "from page-break position (uncertain)",
+                               "line_objs": [], "_last_page": page}
+                    pending_cont = None
+                    # fall through: capture-mode branch below consumes this line
+                else:
+                    pending_cont = None
 
             # ---------------- table capture mode
             if capture is not None:
@@ -937,6 +1021,7 @@ def _parse_document_staged(pdf, uncertainties):
                     # fall through: process this line normally below
                 else:
                     capture["line_objs"].append((page, ln))
+                    capture["_last_page"] = page
                     capture["bbox"] = bbox_dict(union_bbox([
                         (capture["bbox"]["x0"], capture["bbox"]["y0"],
                          capture["bbox"]["x1"], capture["bbox"]["y1"]),
@@ -969,7 +1054,7 @@ def _parse_document_staged(pdf, uncertainties):
                     capture = {"label": tm.group(1), "caption": t,
                                "page": page, "bbox": bbox_dict(merged_box),
                                "continued": bool(TAB_CONT_RE.search(t)),
-                               "line_objs": []}
+                               "line_objs": [], "_last_page": page}
                     if capture["continued"]:
                         capture["note"] = "continuation of a table from a previous page"
                     md_parts.append("**%s**\n" % t)
@@ -1042,7 +1127,7 @@ def _parse_document_staged(pdf, uncertainties):
                                    "sparse": page_class.count("sparse"),
                                    "empty": page_class.count("empty")},
                   "ocr_pages": ocr_pages, "sparse_pages": sparse_pages,
-                  "empty_pages": empty_pages},
+                  "empty_pages": empty_pages, "ocr_detail": ocr_detail},
         "changes": [],
     }
     return result, "\n".join(md_parts), None

@@ -24,22 +24,29 @@
 | `equations.pdf` | 编号公式、多行公式、以 (N) 结尾的正文防误判 |
 | `scanned.pdf` | 纯图像页 → unreadable，无编造文字 |
 | `mixedlayer.pdf` | 文字层 + 纯图像页混合 → partial 并标记页码 |
+| `crosspage_table.pdf` | 跨页表格：行不跨页合并、按页成格、续表关联 |
 
-另有单元检查：Tesseract TSV 像素坐标 → PDF pt 换算（不需要安装 tesseract）。
+另有单元检查：Tesseract TSV 像素坐标 → PDF pt 换算、OCR 置信度聚合
+（均不需要安装 tesseract）。
+
+`run_case_tests.py` 为 harness 级测试：陈旧 result.json 防护、case_id 守卫、
+阶段 2 缓存复用（不重解析）、无效证据索引/错误页码/错误 bbox 检出、
+无证据答案标记、缺 PDF 诚实失败。
 
 ## 实测指标
 
-报告（`regression_work/regression_report.md`）记录：文字包含性、阅读顺序锚点、
-章节检出与误判、表/图/公式/参考文献计数、表格单元格命中、元数据字段、
-bbox 合法性（坐标范围）、状态判定、每夹具耗时与运行环境。
+报告（`regression_work/regression_report.md` 与
+`case_tests_work/case_test_report.md`）记录实测值；无法运行的检查
+（如无 tesseract 时的 OCR 端到端）标注 NOT RUN，从不记为通过。
 
-最近一次实测（2026-11-22，Windows + Python 3.12.5 + Poppler，无 tesseract）：
-**77/77 检查通过**；OCR 端到端 NOT RUN（坐标换算单元检查通过）。
+最近一次实测（2026-11-23，Windows + Python 3.12.5 + Poppler，无 tesseract）：
+**回归 84/84 通过；run_case 级 8/8 通过**；OCR 端到端 NOT RUN。
 此数值仅在本机本次运行有效，环境变化后需重跑。
 
 ## 运行
 
 ```bash
 python tests/run_regression.py            # 重建夹具并全量实测
+python tests/run_case_tests.py            # harness 级测试
 python tests/make_fixtures.py --out dir   # 仅生成夹具
 ```

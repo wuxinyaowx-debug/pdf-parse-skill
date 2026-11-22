@@ -290,6 +290,34 @@ def fx_mixedlayer(out):
         png.unlink()
 
 
+def fx_crosspage_table(out):
+    """Table starts near the bottom of page 1 and continues on page 2 with an
+    explicit 'Table 1 (continued)' caption. Rows must stay per-page."""
+    LX = 0.06
+    with PdfPages(out / "crosspage_table.pdf") as pdf:
+        fig, w = new_page(pdf, None, 1)
+        fig.text(0.5, 0.95, "Cross Page Table Fixture", ha="center",
+                 fontsize=13, fontweight="bold", family=SERIF)
+        w.text(LX, 0.92, "1 Data", size=10, weight="bold")
+        y = w.col(LX, 0.90, wrap("The table begins on this page and continues "
+                                 "on the next one.", 52))
+        w.col(LX, y - 0.01, ["Table 1: Rows split across two pages.",
+                             "Group      Item       Score",
+                             "A          a1         10",
+                             "A          a2         20"])
+        pdf.savefig(fig)
+        plt.close(fig)
+        fig, w = new_page(pdf, None, 2)
+        w.col(LX, 0.94, ["Table 1 (continued)",
+                         "Group      Item       Score",
+                         "B          b1         30",
+                         "B          b2         40"])
+        w.text(LX, 0.80, "2 Closing", size=10, weight="bold")
+        w.col(LX, 0.78, wrap("Closing prose after the continued table.", 52))
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
 ALL = {
     "singlecol": fx_singlecol,
     "twocol": fx_twocol,
@@ -299,6 +327,7 @@ ALL = {
     "equations": fx_equations,
     "scanned": fx_scanned,
     "mixedlayer": fx_mixedlayer,
+    "crosspage_table": fx_crosspage_table,
 }
 
 

@@ -1,10 +1,10 @@
 # Regression report (measured, not estimated)
 
 - environment: python 3.12.5; pdftotext=yes; pdftoppm=yes; tesseract=MISSING (OCR paths NOT RUN)
-- total checks: 77, passed: 77, failed: 0
+- total checks: 84, passed: 84, failed: 0
 - OCR end-to-end: NOT RUN (tesseract missing) — TSV coordinate conversion unit-checked instead
 
-## singlecol — 18/18 checks passed, 0.16s, status=success
+## singlecol — 18/18 checks passed, 0.14s, status=success
 - [PASS] text contains: deep parsing of single column articles
 - [PASS] text contains: alice example, bob sample
 - [PASS] text contains: keywords: layout; parsing; metadata
@@ -24,7 +24,7 @@
 - [PASS] metadata keywords
 - [PASS] bbox validity (11 boxes)
 
-## twocol — 21/21 checks passed, 0.21s, status=success
+## twocol — 21/21 checks passed, 0.20s, status=success
 - [PASS] text contains: a study of synthetic layout parsing
 - [PASS] text contains: jane doe, john smith
 - [PASS] text contains: department of testing, example university
@@ -47,7 +47,7 @@
 - [PASS] metadata authors
 - [PASS] bbox validity (25 boxes)
 
-## threecol — 7/7 checks passed, 0.11s, status=success
+## threecol — 7/7 checks passed, 0.14s, status=success
 - [PASS] reading order (6 anchors)
 - [PASS] section found: 1 Introduction
 - [PASS] section found: 2 Middle Column
@@ -56,7 +56,7 @@
 - [PASS] refs count == 1
 - [PASS] bbox validity (11 boxes)
 
-## mixedlayout — 7/7 checks passed, 0.11s, status=success
+## mixedlayout — 7/7 checks passed, 0.12s, status=success
 - [PASS] reading order (5 anchors)
 - [PASS] section found: 1 Introduction
 - [PASS] section found: 2 Early Right
@@ -65,7 +65,7 @@
 - [PASS] tables count == 1
 - [PASS] bbox validity (10 boxes)
 
-## table — 11/11 checks passed, 0.11s, status=success
+## table — 11/11 checks passed, 0.12s, status=success
 - [PASS] reading order (3 anchors)
 - [PASS] tables count == 1
 - [PASS] table cell present: 91.2
@@ -78,7 +78,7 @@
 - [PASS] table cell present: f1
 - [PASS] bbox validity (7 boxes)
 
-## equations — 6/6 checks passed, 0.11s, status=success
+## equations — 6/6 checks passed, 0.12s, status=success
 - [PASS] reading order (3 anchors)
 - [PASS] equations count == 2
 - [PASS] equation number 1 found
@@ -86,15 +86,24 @@
 - [PASS] prose not misread as equation: see also the earlier review
 - [PASS] bbox validity (9 boxes)
 
-## scanned — 2/2 checks passed, 0.13s, status=unreadable
+## scanned — 2/2 checks passed, 0.14s, status=unreadable
 - [PASS] status in ['unreadable', 'partial']
 - [PASS] bbox validity (0 boxes)
 
-## mixedlayer — 4/4 checks passed, 0.18s, status=partial
+## mixedlayer — 4/4 checks passed, 0.22s, status=partial
 - [PASS] text contains: this page has a normal text layer
 - [PASS] status in ['partial', 'success']
 - [PASS] image page 2 flagged
 - [PASS] bbox validity (4 boxes)
 
+## crosspage_table — 6/6 checks passed, 0.16s, status=success
+- [PASS] reading order (4 anchors)
+- [PASS] tables count == 2
+- [PASS] page-1 grid has no page-2 rows
+- [PASS] page-2 grid has no page-1 rows
+- [PASS] continuation link recorded
+- [PASS] bbox validity (7 boxes)
+
 ## unit checks
 - [PASS] ocr tsv conversion (300dpi px -> pt) — got (72.0, 144.0, 108.0, 158.4), want (72, 144, 108, 158.4)
+- [PASS] ocr tsv confidence aggregation — got {'words': 2, 'mean_conf': 70.0}

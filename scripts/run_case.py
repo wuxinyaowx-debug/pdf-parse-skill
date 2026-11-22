@@ -19,6 +19,7 @@ Defaults match the evaluation contract: --input /input --output /app/output
 written; 1 only when no result could be produced at all.
 """
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -157,10 +158,43 @@ def analyze_task(task_text, parsed):
     return items
 
 
-def merge_answers(task_items, answers_obj, uncertainties, changes):
-    """Merge Agent-written answers.json into task items.
+def validate_evidence(ev, parsed):
+    """Check one evidence reference against the parsed result. Returns a list
+    of problems (empty = valid). Never silently accepts bad indices/pages."""
+    problems = []
+    kind = ev.get("kind", "paragraph")
+    coll_map = {"paragraph": ("paragraphs", "paragraph_index"),
+                "table": ("tables", "table_index"),
+                "figure": ("figures", "figure_index")}
+    if kind not in coll_map:
+        return ["unknown evidence kind %r" % kind]
+    coll_name, idx_name = coll_map[kind]
+    coll = parsed.get(coll_name, [])
+    idx = ev.get(idx_name)
+    if not isinstance(idx, int) or isinstance(idx, bool) or not (0 <= idx < len(coll)):
+        return ["%s %r out of range (collection size %d)" % (idx_name, idx, len(coll))]
+    obj = coll[idx]
+    obj_pages = obj.get("pages", [obj.get("page")])
+    if ev.get("page") is not None and ev["page"] not in obj_pages:
+        problems.append("page %r does not match %s pages %s"
+                        % (ev["page"], kind, obj_pages))
+    if ev.get("bbox"):
+        actual = obj.get("bbox") or {}
+        for k in ("x0", "y0", "x1", "y1"):
+            if k in ev["bbox"] and k in actual \
+                    and abs(ev["bbox"][k] - actual[k]) > 1.5:
+                problems.append("bbox.%s %r does not match actual %r"
+                                % (k, ev["bbox"][k], actual[k]))
+                break
+    return problems
+
+
+def merge_answers(task_items, answers_obj, parsed, uncertainties, changes):
+    """Merge Agent-written answers.json into task items, validating every
+    evidence reference against the phase-1 parsed result.
     Expected format: {"items": [{"id": "item-1", "answer": "...",
-    "evidence": [{"paragraph_index": 0, "page": 1}], "confidence": "high"}]}"""
+    "evidence": [{"kind": "paragraph", "paragraph_index": 0, "page": 1}],
+    "confidence": "high"}]}"""
     by_id = {a.get("id"): a for a in answers_obj.get("items", [])
              if isinstance(a, dict)}
     n_merged = 0
@@ -168,15 +202,34 @@ def merge_answers(task_items, answers_obj, uncertainties, changes):
         a = by_id.get(it["id"])
         if not a:
             continue
-        if not a.get("answer"):
+        if not a.get("answer") or not str(a["answer"]).strip():
             uncertainties.append({"issue": "answers.json item has empty answer",
                                   "item": it["id"]})
             continue
         it["answer"] = a["answer"]
-        it["evidence"] = a.get("evidence", it["candidate_evidence"])
+        evidence = a.get("evidence") or []
+        it["evidence"] = evidence
         if "confidence" in a:
             it["confidence"] = a["confidence"]
-        it["answer_status"] = "answered_by_agent"
+        # --- evidence validation (not just a non-empty check) ---
+        invalid = []
+        for ev in evidence:
+            for prob in validate_evidence(ev, parsed):
+                invalid.append({"evidence": ev, "problem": prob})
+        it["evidence_validation"] = {"checked": len(evidence),
+                                     "invalid": invalid}
+        if not evidence:
+            it["answer_status"] = "answered_no_evidence"
+            uncertainties.append({
+                "issue": "answer provided without any evidence reference",
+                "item": it["id"]})
+        elif invalid:
+            it["answer_status"] = "answered_evidence_suspect"
+            uncertainties.append({
+                "issue": "answer evidence failed validation",
+                "item": it["id"], "invalid": invalid})
+        else:
+            it["answer_status"] = "answered_verified"
         n_merged += 1
     changes.append("merged %d agent answers from answers.json" % n_merged)
     pending = [it["id"] for it in task_items if it["answer"] is None]
@@ -251,33 +304,117 @@ def main():
         print("status=failed reason=no-pdf")
         return 1
 
-    # ---- phase 1: parse ----
-    stdout_log = workdir / "parser.stdout.log"
-    stderr_log = workdir / "parser.stderr.log"
-    with stdout_log.open("w", encoding="utf-8") as so, \
-            stderr_log.open("w", encoding="utf-8") as se:
-        subprocess.run([sys.executable, str(PARSER), str(pdf), "--out",
-                        str(workdir), "--case-id", str(case_id)],
-                       stdout=so, stderr=se, timeout=600)
-    parsed_path = workdir / "result.json"
-    if not parsed_path.is_file():
-        result = {
-            "case_id": case_id,
-            "status": "failed",
-            "reason": "parser produced no result; see work/parser.stderr.log",
-            "parser_stderr_tail": stderr_log.read_text(
-                encoding="utf-8", errors="replace")[-1000:],
-            "uncertainties": [{"issue": "parser hard failure"}],
-            "sources": [], "changes": changes,
-            "runtime": {"seconds": round(time.time() - t0, 2)},
-        }
-        (outdir / "result.json").write_text(
-            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-        print("status=failed reason=parser-crash")
-        return 1
+    # ---- fingerprint for phase-1 reuse (phase 2 must NOT re-parse) ----
+    fp_current = {
+        "case_id": case_id,
+        "pdf": str(pdf.resolve()),
+        "pdf_size": pdf.stat().st_size,
+        "case_md5": hashlib.md5(case_path.read_bytes()).hexdigest()
+        if case_path.is_file() else None,
+        "task_md5": hashlib.md5(task_path.read_bytes()).hexdigest()
+        if task_path.is_file() else None,
+    }
+    fp_path = workdir / "phase1_fingerprint.json"
+    final_path = workdir / "phase1_final.json"
 
-    parsed = json.loads(parsed_path.read_text(encoding="utf-8"))
-    uncertainties.extend(parsed.get("uncertainties", []))
+    parsed = None
+    task_items = None
+    if args.answers and fp_path.is_file() and final_path.is_file():
+        try:
+            fp_old = json.loads(fp_path.read_text(encoding="utf-8"))
+            if fp_old == fp_current:
+                cached = json.loads(final_path.read_text(encoding="utf-8"))
+                if cached.get("case_id") == case_id:
+                    parsed = cached["result"]
+                    task_items = cached.get("task_items", [])
+                    uncertainties.extend(cached.get("uncertainties", []))
+                    changes.append("phase-1 result reused from work cache "
+                                   "(PDF not re-parsed)")
+                    print("phase1=reused case_id=%s" % case_id)
+        except (json.JSONDecodeError, KeyError) as e:
+            changes.append("phase-1 cache unreadable, re-running: %s" % e)
+
+    if parsed is None:
+        # ---- phase 1: parse (stale-artifact protection) ----
+        for stale in ("result.json", "fulltext.md"):
+            (workdir / stale).unlink(missing_ok=True)
+        stdout_log = workdir / "parser.stdout.log"
+        stderr_log = workdir / "parser.stderr.log"
+        proc, proc_err = None, None
+        try:
+            with stdout_log.open("w", encoding="utf-8") as so, \
+                    stderr_log.open("w", encoding="utf-8") as se:
+                proc = subprocess.run([sys.executable, str(PARSER), str(pdf),
+                                       "--out", str(workdir), "--case-id",
+                                       str(case_id)],
+                                      stdout=so, stderr=se, timeout=600)
+        except subprocess.TimeoutExpired:
+            proc_err = "parser exceeded 600 s timeout"
+        except OSError as e:
+            proc_err = "parser spawn failed: %s" % e
+
+        parsed_path = workdir / "result.json"
+        fail_reason = None
+        if proc_err:
+            fail_reason = proc_err
+        elif proc is not None and proc.returncode != 0:
+            fail_reason = "parser exited with code %d" % proc.returncode
+        elif not parsed_path.is_file():
+            fail_reason = "parser produced no result.json"
+        if fail_reason:
+            result = {
+                "case_id": case_id,
+                "status": "failed",
+                "reason": fail_reason + "; see work/parser.stderr.log",
+                "parser_stderr_tail": stderr_log.read_text(
+                    encoding="utf-8", errors="replace")[-1000:]
+                if stderr_log.is_file() else "",
+                "uncertainties": [{"issue": "parser hard failure",
+                                   "detail": fail_reason}],
+                "sources": [], "changes": changes,
+                "runtime": {"seconds": round(time.time() - t0, 2)},
+            }
+            (outdir / "result.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            print("status=failed reason=%s" % fail_reason)
+            return 1
+
+        try:
+            parsed = json.loads(parsed_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            (outdir / "result.json").write_text(json.dumps({
+                "case_id": case_id, "status": "failed",
+                "reason": "parser result.json is not valid JSON: %s" % e,
+                "uncertainties": [{"issue": "parser output corrupt"}],
+                "sources": [], "changes": changes,
+                "runtime": {"seconds": round(time.time() - t0, 2)}},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+            print("status=failed reason=corrupt-parser-output")
+            return 1
+        # guard: never accept another case's result
+        if parsed.get("case_id") != case_id:
+            (outdir / "result.json").write_text(json.dumps({
+                "case_id": case_id, "status": "failed",
+                "reason": "parser output case_id %r does not match current "
+                          "case %r; refusing to reuse" % (parsed.get("case_id"),
+                                                         case_id),
+                "uncertainties": [{"issue": "case_id mismatch"}],
+                "sources": [], "changes": changes,
+                "runtime": {"seconds": round(time.time() - t0, 2)}},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+            print("status=failed reason=case-id-mismatch")
+            return 1
+        uncertainties.extend(parsed.get("uncertainties", []))
+
+        # ---- phase 1b: task analysis + evidence retrieval (no answering) ----
+        task_items = analyze_task(task_text, parsed) if task_text.strip() else []
+        if task_items:
+            uncertainties.append({
+                "issue": "task items are analyzed and evidence-retrieved but NOT "
+                         "answered by the script; semantic answering is the Agent "
+                         "phase-2 step (see SKILL.md). answers=null until an "
+                         "answers.json is merged via --answers.",
+                "pending_items": [it["id"] for it in task_items]})
 
     # ---- phase 1b: task analysis + evidence retrieval (no answering) ----
     task_items = analyze_task(task_text, parsed) if task_text.strip() else []
@@ -289,13 +426,13 @@ def main():
                      "answers.json is merged via --answers.",
             "pending_items": [it["id"] for it in task_items]})
 
-    # ---- optional phase 2 merge ----
+    # ---- optional phase 2 merge (evidence-validated) ----
     if args.answers:
         apath = Path(args.answers)
         if apath.is_file():
             try:
                 answers_obj = json.loads(apath.read_text(encoding="utf-8-sig"))
-                pending = merge_answers(task_items, answers_obj,
+                pending = merge_answers(task_items, answers_obj, parsed,
                                         uncertainties, changes)
                 if pending:
                     uncertainties.append({"issue": "task items still unanswered",
@@ -357,6 +494,14 @@ def main():
                      "reason": "no deterministic source for this field; "
                                "null is reported instead of a fabricated value"})
     final["output_contract_raw"] = contract
+
+    # cache phase-1 output so a later --answers run can reuse it without
+    # re-parsing the PDF
+    if not args.answers:
+        fp_path.write_text(json.dumps(fp_current, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+        final_path.write_text(json.dumps(final, ensure_ascii=False),
+                              encoding="utf-8")
 
     (outdir / "result.json").write_text(
         json.dumps(final, ensure_ascii=False, indent=2), encoding="utf-8")
